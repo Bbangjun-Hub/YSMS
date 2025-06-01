@@ -1,0 +1,87 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: youtube_mail_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - youtube_mail_network
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./token.json:/app/token.json
+      - ./credentials.json:/app/credentials.json
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - redis
+    networks:
+      - youtube_mail_network
+    command: python manage.py runserver 0.0.0.0:8000
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - youtube_mail_network
+    command: npm start
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - youtube_mail_network
+
+  celery:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+      - ./token.json:/app/token.json
+      - ./credentials.json:/app/credentials.json
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - redis
+    networks:
+      - youtube_mail_network
+    command: celery -A youtube_mail_project worker --loglevel=info
+
+  celery-beat:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+      - ./token.json:/app/token.json
+      - ./credentials.json:/app/credentials.json
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - redis
+    networks:
+      - youtube_mail_network
+    command: celery -A youtube_mail_project beat --loglevel=info
+
+volumes:
+  postgres_data:
+
+networks:
+  youtube_mail_network:
+    driver: bridge
