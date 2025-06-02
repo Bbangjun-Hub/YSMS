@@ -69,11 +69,14 @@ const RegisterPage = () => {
       // 각 채널에 대해 개별적으로 구독 등록
       const promises = channels.map(channel => {
         const subscriptionData = {
-          ...formData,
+          user_name: formData.name,
+          user_email: formData.email,
+          password: formData.password,
+          user_notification_time: formData.notification_time,
           youtube_channel_url: channel.youtube_channel_url,
           channel_name: channel.channel_name
         };
-        return axios.post('http://localhost:8000/api/subscriptions/', subscriptionData);
+        return axios.post('http://localhost:8000/api/subscriptions/register/', subscriptionData);
       });
 
       await Promise.all(promises);
@@ -98,9 +101,13 @@ const RegisterPage = () => {
         if (error.response.data.error && error.response.data.error.includes('이미 등록된 이메일')) {
           errorMessage = `이미 등록된 이메일입니다. "${formData.email}"은 이미 사용 중입니다.`;
         }
+        // 채널 중복 오류 체크
+        else if (error.response.data.error && error.response.data.error.includes('이미 해당 채널을 구독')) {
+          errorMessage = `이미 해당 채널을 구독하고 있습니다.`;
+        }
         // 다른 필드 오류들 체크
-        else if (error.response.data.email) {
-          errorMessage = `이메일 오류: ${error.response.data.email[0]}`;
+        else if (error.response.data.user_email) {
+          errorMessage = `이메일 오류: ${error.response.data.user_email[0]}`;
         }
         else if (error.response.data.youtube_channel_url) {
           errorMessage = `YouTube URL 오류: ${error.response.data.youtube_channel_url[0]}`;
@@ -113,6 +120,9 @@ const RegisterPage = () => {
         }
         else if (error.response.data.error) {
           errorMessage = error.response.data.error;
+        }
+        else if (error.response.data.non_field_errors) {
+          errorMessage = error.response.data.non_field_errors[0];
         }
       }
       

@@ -10,6 +10,10 @@ urlpatterns = [
     path('<int:pk>/', views.SubscriptionDetailView.as_view(), 
          name='subscription-detail'),
     
+    # 사용자 관리 API
+    path('user/<str:email>/', views.UserUpdateView.as_view(), 
+         name='user-update'),
+    
     # 기존 구독 관리 (호환성 유지)
     path('register/', views.SubscriptionCreateView.as_view(), 
          name='register'),
@@ -40,9 +44,15 @@ urlpatterns = [
     path('admin/subscriptions/', 
          views.admin_subscriptions_view, 
          name='admin-subscriptions'),
+    path('admin/users/', 
+         views.admin_users_view, 
+         name='admin-users'),
     path('admin/subscriptions/<int:subscription_id>/', 
          views.admin_delete_subscription_view, 
          name='admin-delete-subscription'),
+    path('admin/users/<int:user_id>/', 
+         views.admin_delete_user_view, 
+         name='admin-delete-user'),
     path('admin/stats/', 
          views.admin_stats_view, 
          name='admin-stats'),

@@ -180,14 +180,16 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
-# 캐시 설정 (임시로 더미 캐시 사용)
+# 캐시 설정 (로컬 메모리 캐시 사용)
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': 3600,  # 기본 1시간
     }
 }
 
-# Redis 캐시 설정 (django_redis 문제 해결 후 사용)
+# Redis 캐시 설정 (Docker 문제 해결 후 사용)
 # CACHES = {
 #     'default': {
 #         'BACKEND': 'django_redis.cache.RedisCache',

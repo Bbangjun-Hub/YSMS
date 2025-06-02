@@ -20,8 +20,8 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - ./token.json:/app/token.json
-      - ./credentials.json:/app/credentials.json
+      - ./backend/token.json:/app/token.json
+      - ./backend/credentials.json:/app/credentials.json
     env_file:
       - ./backend/.env
     depends_on:
@@ -53,8 +53,8 @@ services:
     build: ./backend
     volumes:
       - ./backend:/app
-      - ./token.json:/app/token.json
-      - ./credentials.json:/app/credentials.json
+      - ./backend/token.json:/app/token.json
+      - ./backend/credentials.json:/app/credentials.json
     env_file:
       - ./backend/.env
     depends_on:
@@ -68,8 +68,8 @@ services:
     build: ./backend
     volumes:
       - ./backend:/app
-      - ./token.json:/app/token.json
-      - ./credentials.json:/app/credentials.json
+      - ./backend/token.json:/app/token.json
+      - ./backend/credentials.json:/app/credentials.json
     env_file:
       - ./backend/.env
     depends_on:

@@ -347,12 +347,36 @@ class YouTubeMailService:
     
     def send_summary_emails(self, subscriptions: List[Subscription], 
                            summarized_content: str) -> bool:
-        """요약된 콘텐츠를 이메일로 발송"""
+        """요약된 콘텐츠를 이메일로 발송 (사용자별로 그룹핑)"""
         kst = pytz.timezone('Asia/Seoul')
         current_date = datetime.now(kst).strftime('%Y-%m-%d')
         
+        # 사용자별로 구독 그룹핑
+        user_subscriptions = {}
+        for subscription in subscriptions:
+            # 이메일 주소 가져오기 (user 모델에서 우선, 없으면 기존 email 필드)
+            recipient_email = None
+            user_name = None
+            
+            if subscription.user and subscription.user.email:
+                recipient_email = subscription.user.email
+                user_name = subscription.user.name
+            elif subscription.email:
+                recipient_email = subscription.email
+                user_name = subscription.name
+            else:
+                logger.error(f"구독 ID {subscription.id}에 이메일 주소가 없습니다.")
+                continue
+            
+            if recipient_email not in user_subscriptions:
+                user_subscriptions[recipient_email] = {
+                    'user_name': user_name,
+                    'subscriptions': []
+                }
+            user_subscriptions[recipient_email]['subscriptions'].append(subscription)
+        
         success_count = 0
-        total_count = len(subscriptions)
+        total_count = len(user_subscriptions)
         
         # Gmail API 서비스 초기화
         gmail_service = None
@@ -369,66 +393,71 @@ class YouTubeMailService:
             logger.info("Gmail API 서비스 초기화 성공")
         except Exception as e:
             logger.error(f"Gmail API 초기화 실패: {str(e)}")
-            # Gmail API 실패 시 Django 기본 이메일 백엔드 사용
             gmail_service = None
         
-        for subscription in subscriptions:
+        # 사용자별로 이메일 발송
+        for recipient_email, user_data in user_subscriptions.items():
             try:
+                user_name = user_data['user_name']
+                user_subscriptions_list = user_data['subscriptions']
+                
                 # 이메일 제목
                 subject = f'YouTube 채널 요약 - {current_date}'
                 
                 # 콘텐츠가 없는 경우
                 if not summarized_content.strip():
-                    html_content = self._create_no_content_email(
-                        subscription, current_date
+                    html_content = self._create_no_content_email_for_user(
+                        user_name, current_date, user_subscriptions_list
                     )
                 else:
-                    html_content = self._create_summary_email(
-                        subscription, current_date, summarized_content
+                    html_content = self._create_summary_email_for_user(
+                        user_name, current_date, summarized_content, user_subscriptions_list
                     )
                 
                 # Gmail API 사용 시도
                 if gmail_service:
                     success = self._send_email_via_gmail_api(
-                        gmail_service, subscription.email, subject, html_content
+                        gmail_service, recipient_email, subject, html_content
                     )
                     if success:
                         success_count += 1
-                        logger.info(f"Gmail API로 이메일 발송 성공: {subscription.email}")
+                        logger.info(f"Gmail API로 이메일 발송 성공: {recipient_email}")
                     else:
-                        logger.error(f"Gmail API로 이메일 발송 실패: {subscription.email}")
+                        logger.error(f"Gmail API로 이메일 발송 실패: {recipient_email}")
                 else:
                     # Django 기본 이메일 백엔드 사용
                     send_mail(
                         subject=subject,
-                        message='',  # HTML 이메일이므로 텍스트 메시지는 비움
+                        message='',
                         from_email=settings.DEFAULT_FROM_EMAIL,
-                        recipient_list=[subscription.email],
+                        recipient_list=[recipient_email],
                         html_message=html_content,
                         fail_silently=False,
                     )
                     success_count += 1
-                    logger.info(f"Django 이메일로 발송 성공: {subscription.email}")
+                    logger.info(f"Django 이메일로 발송 성공: {recipient_email}")
                 
-                # 이메일 로그 저장
-                EmailLog.objects.create(
-                    subscription=subscription,
-                    subject=subject,
-                    content=html_content[:1000],  # 내용 일부만 저장
-                    is_successful=True
-                )
+                # 각 구독에 대해 이메일 로그 저장
+                for subscription in user_subscriptions_list:
+                    EmailLog.objects.create(
+                        subscription=subscription,
+                        subject=subject,
+                        content=html_content[:1000],
+                        is_successful=True
+                    )
                 
             except Exception as e:
-                logger.error(f"이메일 발송 실패 ({subscription.email}): {str(e)}")
+                logger.error(f"이메일 발송 실패 ({recipient_email}): {str(e)}")
                 
                 # 실패 로그 저장
-                EmailLog.objects.create(
-                    subscription=subscription,
-                    subject=subject if 'subject' in locals() else '',
-                    content="",
-                    is_successful=False,
-                    error_message=str(e)
-                )
+                for subscription in user_subscriptions_list:
+                    EmailLog.objects.create(
+                        subscription=subscription,
+                        subject=subject if 'subject' in locals() else '',
+                        content="",
+                        is_successful=False,
+                        error_message=str(e)
+                    )
         
         logger.info(f"이메일 발송 완료: {success_count}/{total_count}")
         return success_count == total_count
@@ -442,6 +471,7 @@ class YouTubeMailService:
             
             # 이메일 메시지 생성
             message = MIMEMultipart('alternative')
+            message['from'] = 'admin@pwc-edge.com'  # 발신자 주소 추가
             message['to'] = to_email
             message['subject'] = subject
             
@@ -467,9 +497,17 @@ class YouTubeMailService:
             logger.error(f"Gmail API 이메일 발송 실패: {str(e)}")
             return False
     
-    def _create_summary_email(self, subscription: Subscription, 
-                             current_date: str, content: str) -> str:
-        """요약 콘텐츠가 있는 이메일 생성"""
+    def _create_summary_email_for_user(self, user_name: str, current_date: str, 
+                                      content: str, subscriptions: List[Subscription]) -> str:
+        """사용자별 요약 콘텐츠 이메일 생성"""
+        # 구독 채널 목록 생성
+        channel_list = []
+        for subscription in subscriptions:
+            channel_name = subscription.channel_name or subscription.youtube_channel_url
+            channel_list.append(f"• {channel_name}")
+        
+        channels_text = "<br>".join(channel_list)
+        
         return f"""
         <html>
             <head>
@@ -482,8 +520,12 @@ class YouTubeMailService:
                 </div>
                 
                 <div class="email-header" style="background-color: white; padding: 30px; border-bottom: 3px solid #d04a02; margin-bottom: 30px; text-align: center;">
-                    <h1 style="margin: 0; color: #2d2d2d;">{subscription.name}님을 위한 오늘의 YouTube 콘텐츠 요약</h1>
+                    <h1 style="margin: 0; color: #2d2d2d;">{user_name}님을 위한 오늘의 YouTube 콘텐츠 요약</h1>
                     <p style="margin: 10px 0 0 0; color: #666666;">구독하신 채널의 최신 콘텐츠를 AI가 요약했습니다</p>
+                    <div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
+                        <p style="margin: 0; color: #666666; font-size: 14px;"><strong>구독 채널 ({len(subscriptions)}개):</strong></p>
+                        <div style="margin-top: 5px; color: #888888; font-size: 13px;">{channels_text}</div>
+                    </div>
                 </div>
 
                 <div class="content-section" style="margin: 20px 0;">
@@ -499,9 +541,17 @@ class YouTubeMailService:
         </html>
         """
     
-    def _create_no_content_email(self, subscription: Subscription, 
-                                current_date: str) -> str:
-        """콘텐츠가 없는 경우의 이메일 생성"""
+    def _create_no_content_email_for_user(self, user_name: str, current_date: str, 
+                                         subscriptions: List[Subscription]) -> str:
+        """사용자별 콘텐츠 없음 이메일 생성"""
+        # 구독 채널 목록 생성
+        channel_list = []
+        for subscription in subscriptions:
+            channel_name = subscription.channel_name or subscription.youtube_channel_url
+            channel_list.append(f"• {channel_name}")
+        
+        channels_text = "<br>".join(channel_list)
+        
         return f"""
         <html>
             <head>
@@ -514,8 +564,12 @@ class YouTubeMailService:
                 </div>
                 
                 <div class="email-header" style="background-color: white; padding: 30px; border-bottom: 3px solid #d04a02; margin-bottom: 30px; text-align: center;">
-                    <h1 style="margin: 0; color: #2d2d2d;">{subscription.name}님을 위한 오늘의 YouTube 콘텐츠 요약</h1>
+                    <h1 style="margin: 0; color: #2d2d2d;">{user_name}님을 위한 오늘의 YouTube 콘텐츠 요약</h1>
                     <p style="margin: 10px 0 0 0; color: #666666;">구독하신 채널의 최신 콘텐츠를 확인했습니다</p>
+                    <div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
+                        <p style="margin: 0; color: #666666; font-size: 14px;"><strong>구독 채널 ({len(subscriptions)}개):</strong></p>
+                        <div style="margin-top: 5px; color: #888888; font-size: 13px;">{channels_text}</div>
+                    </div>
                 </div>
 
                 <div class="content-section" style="margin: 20px 0;">

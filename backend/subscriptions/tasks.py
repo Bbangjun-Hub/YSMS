@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 # Gmail API 범위 설정
 SCOPES = [
-    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/youtube.readonly',     # YouTube 읽기
+    'https://www.googleapis.com/auth/gmail.send',           # Gmail 발송
+    'https://www.googleapis.com/auth/gmail.compose',        # Gmail 작성
+    'https://www.googleapis.com/auth/gmail.readonly',       # Gmail 읽기
+    'https://www.googleapis.com/auth/gmail.labels',         # Gmail 라벨
     'https://www.googleapis.com/auth/forms.body.readonly',
     'https://www.googleapis.com/auth/forms.responses.readonly'
 ]
@@ -53,6 +57,31 @@ def prepare_scheduled_emails():
         # 정확한 30분 단위 시간으로 변환
         from datetime import time
         rounded_target_time = time(target_hour, rounded_minute, 0)
+        
+        # 캐시 키 생성
+        cache_key = f"prepared_content_{rounded_target_time.strftime('%H_%M')}"
+        
+        # 이미 준비된 콘텐츠가 있는지 확인
+        try:
+            from django.core.cache import cache
+            existing_cache = cache.get(cache_key)
+            if existing_cache:
+                logger.info(f"이미 준비된 콘텐츠가 있습니다: {cache_key}")
+                return {
+                    'success': True,
+                    'message': f'{rounded_target_time.strftime("%H:%M")} '
+                               f'콘텐츠가 이미 준비되어 있습니다.',
+                    'target_time': rounded_target_time.strftime('%H:%M'),
+                    'cache_key': cache_key,
+                    'subscription_count': len(
+                        existing_cache.get('subscriptions', [])
+                    ),
+                    'already_prepared': True
+                }
+        except Exception as cache_error:
+            logger.warning(
+                f"캐시 확인 실패 (더미 캐시 사용 중): {str(cache_error)}"
+            )
         
         # 해당 시간에 발송해야 할 구독들 조회
         subscriptions = Subscription.objects.filter(
@@ -95,7 +124,6 @@ def prepare_scheduled_emails():
         # 준비된 콘텐츠를 캐시에 저장 (더미 캐시 대응)
         try:
             from django.core.cache import cache
-            cache_key = f"prepared_content_{rounded_target_time.strftime('%H_%M')}"
             cache_data = {
                 'content': summarized_content,
                 'subscriptions': [sub.id for sub in subscriptions],
@@ -112,7 +140,8 @@ def prepare_scheduled_emails():
             'target_time': rounded_target_time.strftime('%H:%M'),
             'cache_key': cache_key,
             'subscription_count': subscriptions.count(),
-            'channels_found': len(video_transcripts)
+            'channels_found': len(video_transcripts),
+            'already_prepared': False
         }
         
     except Exception as e:
@@ -190,22 +219,17 @@ def send_scheduled_emails():
                 if cached_subscription_ids == current_subscription_ids:
                     logger.info("캐시된 콘텐츠를 사용하여 이메일 발송")
                 else:
-                    logger.warning("구독 정보가 변경되어 실시간으로 콘텐츠 생성")
+                    logger.warning("구독 정보가 변경되어 캐시된 콘텐츠를 사용할 수 없습니다.")
                     summarized_content = None
             else:
-                logger.warning("캐시된 콘텐츠가 없어 실시간으로 콘텐츠 생성")
+                logger.warning("캐시된 콘텐츠가 없습니다. 10분 전 준비 작업이 실행되지 않았을 수 있습니다.")
         except Exception as cache_error:
             logger.warning(f"캐시 조회 실패 (더미 캐시 사용 중): {str(cache_error)}")
         
-        # 캐시된 콘텐츠가 없으면 실시간 생성
+        # 캐시된 콘텐츠가 없으면 빈 콘텐츠로 이메일 발송
         if summarized_content is None:
-            mail_service = YouTubeMailService()
-            video_transcripts = mail_service.get_video_transcripts(
-                list(subscriptions)
-            )
-            summarized_content = mail_service.summarize_content(
-                video_transcripts
-            )
+            logger.warning("준비된 콘텐츠가 없어 빈 콘텐츠로 이메일을 발송합니다.")
+            summarized_content = ""
         
         # 이메일 발송
         mail_service = YouTubeMailService()
@@ -213,13 +237,6 @@ def send_scheduled_emails():
             list(subscriptions), 
             summarized_content
         )
-        
-        # 캐시 정리 (더미 캐시 대응)
-        try:
-            if cached_data:
-                cache.delete(cache_key)
-        except Exception as cache_error:
-            logger.warning(f"캐시 삭제 실패 (더미 캐시 사용 중): {str(cache_error)}")
         
         return {
             'success': success,
@@ -602,4 +619,67 @@ def get_gmail_service():
         with open(settings.YOUTUBE_API_TOKEN_PATH, 'w') as token:
             token.write(creds.to_json())
     
-    return build('gmail', 'v1', credentials=creds) 
+    return build('gmail', 'v1', credentials=creds)
+
+
+@shared_task
+def refresh_google_token():
+    """Google OAuth 토큰을 자동으로 갱신하는 작업"""
+    try:
+        import json
+        logger.info("Google OAuth 토큰 갱신 작업 시작")
+        
+        token_path = os.path.join(settings.BASE_DIR, 'token.json')
+        credentials_path = os.path.join(settings.BASE_DIR, 'credentials.json')
+        
+        if not os.path.exists(token_path):
+            logger.error(
+                "token.json 파일이 존재하지 않습니다. "
+                "수동으로 토큰을 생성해주세요."
+            )
+            return {
+                'success': False, 
+                'message': 'token.json 파일이 존재하지 않습니다.'
+            }
+        
+        if not os.path.exists(credentials_path):
+            logger.error("credentials.json 파일이 존재하지 않습니다.")
+            return {
+                'success': False, 
+                'message': 'credentials.json 파일이 존재하지 않습니다.'
+            }
+        
+        # 기존 토큰 로드
+        creds = None
+        with open(token_path, 'r') as token_file:
+            token_data = json.load(token_file)
+            creds = Credentials.from_authorized_user_info(token_data)
+        
+        # 토큰이 만료되었거나 유효하지 않은 경우 갱신
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                logger.info("만료된 토큰을 갱신합니다...")
+                creds.refresh(Request())
+                
+                # 갱신된 토큰 저장
+                with open(token_path, 'w') as token_file:
+                    token_file.write(creds.to_json())
+                
+                logger.info("토큰이 성공적으로 갱신되었습니다.")
+                return {'success': True, 'message': '토큰이 성공적으로 갱신되었습니다.'}
+            else:
+                logger.error(
+                    "토큰을 갱신할 수 없습니다. "
+                    "수동으로 새 토큰을 생성해주세요."
+                )
+                return {
+                    'success': False, 
+                    'message': '토큰을 갱신할 수 없습니다. 수동으로 새 토큰을 생성해주세요.'
+                }
+        else:
+            logger.info("토큰이 여전히 유효합니다.")
+            return {'success': True, 'message': '토큰이 여전히 유효합니다.'}
+            
+    except Exception as e:
+        logger.error(f"토큰 갱신 중 오류 발생: {str(e)}")
+        return {'success': False, 'message': f'토큰 갱신 중 오류 발생: {str(e)}'} 

@@ -20,7 +20,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Chip
+  Chip,
+  Divider
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -28,18 +29,26 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import YouTubeIcon from '@mui/icons-material/YouTube';
 import LogoutIcon from '@mui/icons-material/Logout';
+import AddIcon from '@mui/icons-material/Add';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import axios from 'axios';
 
 const EditPage = () => {
   const navigate = useNavigate();
   const [subscriptions, setSubscriptions] = useState([]);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editingSubscription, setEditingSubscription] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, subscription: null });
+  const [addChannelDialog, setAddChannelDialog] = useState(false);
+  const [editUserDialog, setEditUserDialog] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
   const [formData, setFormData] = useState({
-    name: '',
     youtube_channel_url: '',
+    channel_name: ''
+  });
+  const [userFormData, setUserFormData] = useState({
+    name: '',
     notification_time: '09:00'
   });
 
@@ -50,11 +59,28 @@ const EditPage = () => {
       navigate('/login');
       return;
     }
-    fetchSubscriptions();
+    fetchUserData();
   }, [userEmail, navigate]);
 
-  const fetchSubscriptions = async () => {
+  const fetchUserData = async () => {
     try {
+      // 로그인 데이터에서 사용자 정보 가져오기
+      const storedData = localStorage.getItem('subscriptionData');
+      if (storedData) {
+        const loginData = JSON.parse(storedData);
+        if (loginData.user) {
+          setUser(loginData.user);
+          setUserFormData({
+            name: loginData.user.name,
+            notification_time: loginData.user.notification_time
+          });
+        }
+        if (loginData.subscriptions) {
+          setSubscriptions(loginData.subscriptions);
+        }
+      }
+      
+      // 최신 구독 정보 가져오기
       const response = await axios.get(`http://localhost:8000/api/subscriptions/?email=${userEmail}`);
       setSubscriptions(response.data.results || []);
     } catch (error) {
@@ -68,16 +94,15 @@ const EditPage = () => {
     }
   };
 
-  const handleEdit = (subscription) => {
+  const handleEditSubscription = (subscription) => {
     setEditingSubscription(subscription);
     setFormData({
-      name: subscription.name,
       youtube_channel_url: subscription.youtube_channel_url,
-      notification_time: subscription.notification_time
+      channel_name: subscription.channel_name || ''
     });
   };
 
-  const handleUpdate = async (e) => {
+  const handleUpdateSubscription = async (e) => {
     e.preventDefault();
     setLoading(true);
 
@@ -93,12 +118,78 @@ const EditPage = () => {
       });
       
       setEditingSubscription(null);
-      fetchSubscriptions();
+      fetchUserData();
       
     } catch (error) {
       setMessage({ 
         type: 'error', 
         text: '수정 중 오류가 발생했습니다.' 
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddChannel = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await axios.post('http://localhost:8000/api/subscriptions/register/', {
+        user_email: userEmail,
+        youtube_channel_url: formData.youtube_channel_url,
+        channel_name: formData.channel_name || ''
+      });
+      
+      setMessage({ 
+        type: 'success', 
+        text: '새 채널이 성공적으로 추가되었습니다.' 
+      });
+      
+      setAddChannelDialog(false);
+      setFormData({ youtube_channel_url: '', channel_name: '' });
+      fetchUserData();
+      
+    } catch (error) {
+      setMessage({ 
+        type: 'error', 
+        text: error.response?.data?.error || '채널 추가 중 오류가 발생했습니다.' 
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      await axios.put(
+        `http://localhost:8000/api/subscriptions/user/${userEmail}/`,
+        userFormData
+      );
+      
+      setMessage({ 
+        type: 'success', 
+        text: '사용자 정보가 성공적으로 수정되었습니다.' 
+      });
+      
+      setEditUserDialog(false);
+      
+      // 로컬 스토리지 업데이트
+      const storedData = JSON.parse(localStorage.getItem('subscriptionData') || '{}');
+      if (storedData.user) {
+        storedData.user = { ...storedData.user, ...userFormData };
+        localStorage.setItem('subscriptionData', JSON.stringify(storedData));
+      }
+      
+      setUser(prev => ({ ...prev, ...userFormData }));
+      
+    } catch (error) {
+      setMessage({ 
+        type: 'error', 
+        text: '사용자 정보 수정 중 오류가 발생했습니다.' 
       });
     } finally {
       setLoading(false);
@@ -117,7 +208,7 @@ const EditPage = () => {
       });
       
       setDeleteDialog({ open: false, subscription: null });
-      fetchSubscriptions();
+      fetchUserData();
       
     } catch (error) {
       setMessage({ 
@@ -136,6 +227,13 @@ const EditPage = () => {
   const handleChange = (e) => {
     setFormData({
       ...formData,
+      [e.target.name]: e.target.value
+    });
+  };
+
+  const handleUserChange = (e) => {
+    setUserFormData({
+      ...userFormData,
       [e.target.name]: e.target.value
     });
   };
@@ -177,7 +275,7 @@ const EditPage = () => {
             구독 관리
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            {userEmail}님의 구독 목록
+            {user?.name || userEmail}님의 구독 목록
           </Typography>
         </Box>
       </Box>
@@ -189,6 +287,47 @@ const EditPage = () => {
           </Alert>
         </Box>
       )}
+
+      {/* 사용자 정보 카드 */}
+      {user && (
+        <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                사용자 정보
+              </Typography>
+              <Typography variant="body1" sx={{ mb: 1 }}>
+                이름: {user.name}
+              </Typography>
+              <Box display="flex" alignItems="center" gap={1}>
+                <AccessTimeIcon fontSize="small" color="primary" />
+                <Typography variant="body1">
+                  공통 알림 시간: {user.notification_time}
+                </Typography>
+              </Box>
+            </Box>
+            <Button
+              variant="outlined"
+              startIcon={<EditIcon />}
+              onClick={() => setEditUserDialog(true)}
+            >
+              수정
+            </Button>
+          </Box>
+        </Paper>
+      )}
+
+      {/* 액션 버튼 */}
+      <Box mb={3}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setAddChannelDialog(true)}
+          size="large"
+        >
+          새 채널 추가
+        </Button>
+      </Box>
 
       {/* 구독 목록 */}
       {subscriptions.length === 0 ? (
@@ -202,9 +341,10 @@ const EditPage = () => {
           </Typography>
           <Button
             variant="contained"
-            onClick={() => navigate('/register')}
+            startIcon={<AddIcon />}
+            onClick={() => setAddChannelDialog(true)}
           >
-            새 구독 등록하기
+            첫 번째 채널 추가하기
           </Button>
         </Paper>
       ) : (
@@ -216,22 +356,13 @@ const EditPage = () => {
                   <Box display="flex" alignItems="center" mb={2}>
                     <YouTubeIcon sx={{ color: 'red', mr: 1 }} />
                     <Typography variant="h6" component="h3">
-                      {subscription.name}
+                      {subscription.channel_name || '채널'}
                     </Typography>
                   </Box>
                   
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    채널: {subscription.youtube_channel_url}
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    {subscription.youtube_channel_url}
                   </Typography>
-                  
-                  <Box display="flex" alignItems="center" gap={1} mb={2}>
-                    <Chip 
-                      label={`알림 시간: ${subscription.notification_time}`}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                    />
-                  </Box>
                   
                   <Typography variant="body2" color="text.secondary">
                     등록일: {new Date(subscription.created_at).toLocaleDateString()}
@@ -242,7 +373,7 @@ const EditPage = () => {
                   <Button
                     size="small"
                     startIcon={<EditIcon />}
-                    onClick={() => handleEdit(subscription)}
+                    onClick={() => handleEditSubscription(subscription)}
                   >
                     수정
                   </Button>
@@ -261,7 +392,51 @@ const EditPage = () => {
         </Grid>
       )}
 
-      {/* 편집 다이얼로그 */}
+      {/* 새 채널 추가 다이얼로그 */}
+      <Dialog 
+        open={addChannelDialog} 
+        onClose={() => setAddChannelDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>새 채널 추가</DialogTitle>
+        <form onSubmit={handleAddChannel}>
+          <DialogContent>
+            <Box mb={2}>
+              <TextField
+                fullWidth
+                label="YouTube 채널 URL"
+                name="youtube_channel_url"
+                value={formData.youtube_channel_url}
+                onChange={handleChange}
+                required
+                variant="outlined"
+                placeholder="https://www.youtube.com/@channelname"
+              />
+            </Box>
+            
+            <TextField
+              fullWidth
+              label="채널 이름 (선택사항)"
+              name="channel_name"
+              value={formData.channel_name}
+              onChange={handleChange}
+              variant="outlined"
+              helperText="채널 이름을 입력하지 않으면 자동으로 감지됩니다"
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setAddChannelDialog(false)}>
+              취소
+            </Button>
+            <Button type="submit" variant="contained" disabled={loading}>
+              {loading ? '추가 중...' : '추가'}
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* 구독 편집 다이얼로그 */}
       <Dialog 
         open={!!editingSubscription} 
         onClose={() => setEditingSubscription(null)}
@@ -269,20 +444,8 @@ const EditPage = () => {
         fullWidth
       >
         <DialogTitle>구독 정보 수정</DialogTitle>
-        <form onSubmit={handleUpdate}>
+        <form onSubmit={handleUpdateSubscription}>
           <DialogContent>
-            <Box mb={2}>
-              <TextField
-                fullWidth
-                label="이름"
-                name="name"
-                value={formData.name}
-                onChange={handleChange}
-                required
-                variant="outlined"
-              />
-            </Box>
-            
             <Box mb={2}>
               <TextField
                 fullWidth
@@ -295,13 +458,55 @@ const EditPage = () => {
               />
             </Box>
             
+            <TextField
+              fullWidth
+              label="채널 이름"
+              name="channel_name"
+              value={formData.channel_name}
+              onChange={handleChange}
+              variant="outlined"
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setEditingSubscription(null)}>
+              취소
+            </Button>
+            <Button type="submit" variant="contained" disabled={loading}>
+              {loading ? '수정 중...' : '수정'}
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* 사용자 정보 편집 다이얼로그 */}
+      <Dialog 
+        open={editUserDialog} 
+        onClose={() => setEditUserDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>사용자 정보 수정</DialogTitle>
+        <form onSubmit={handleUpdateUser}>
+          <DialogContent>
+            <Box mb={2}>
+              <TextField
+                fullWidth
+                label="이름"
+                name="name"
+                value={userFormData.name}
+                onChange={handleUserChange}
+                required
+                variant="outlined"
+              />
+            </Box>
+            
             <FormControl fullWidth>
-              <InputLabel>알림 시간</InputLabel>
+              <InputLabel>공통 알림 시간</InputLabel>
               <Select
                 name="notification_time"
-                value={formData.notification_time}
-                onChange={handleChange}
-                label="알림 시간"
+                value={userFormData.notification_time}
+                onChange={handleUserChange}
+                label="공통 알림 시간"
               >
                 <MenuItem value="06:00">오전 6시</MenuItem>
                 <MenuItem value="06:30">오전 6시 30분</MenuItem>
@@ -339,9 +544,13 @@ const EditPage = () => {
                 <MenuItem value="22:30">오후 10시 30분</MenuItem>
               </Select>
             </FormControl>
+            
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              이 시간은 모든 구독 채널에 공통으로 적용됩니다.
+            </Typography>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setEditingSubscription(null)}>
+            <Button onClick={() => setEditUserDialog(false)}>
               취소
             </Button>
             <Button type="submit" variant="contained" disabled={loading}>
@@ -359,7 +568,7 @@ const EditPage = () => {
         <DialogTitle>구독 삭제 확인</DialogTitle>
         <DialogContent>
           <Typography>
-            정말로 "{deleteDialog.subscription?.name}" 구독을 삭제하시겠습니까?
+            정말로 "{deleteDialog.subscription?.channel_name || '이 채널'}" 구독을 삭제하시겠습니까?
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             이 작업은 되돌릴 수 없습니다.

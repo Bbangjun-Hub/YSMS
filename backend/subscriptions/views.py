@@ -5,13 +5,14 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import login
-from .models import Subscription, EmailLog
+from .models import Subscription, EmailLog, User
 from .serializers import (
     SubscriptionSerializer, 
     LoginSerializer, 
     EmailLogSerializer,
     TestEmailSerializer,
-    AdminLoginSerializer
+    AdminLoginSerializer,
+    UserSerializer
 )
 from .tasks import send_test_email_task
 from django.core.mail import send_mail
@@ -29,13 +30,22 @@ class SubscriptionCreateView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
-            # 이메일 중복 체크
-            email = serializer.validated_data.get('email')
-            if Subscription.objects.filter(email=email).exists():
-                return Response(
-                    {'error': '이미 등록된 이메일입니다.'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # 사용자 이메일과 채널 URL 조합 중복 체크
+            user_email = serializer.validated_data.get('user_email')
+            youtube_channel_url = serializer.validated_data.get('youtube_channel_url')
+            
+            try:
+                user = User.objects.get(email=user_email)
+                if Subscription.objects.filter(
+                    user=user, 
+                    youtube_channel_url=youtube_channel_url
+                ).exists():
+                    return Response(
+                        {'error': '이미 해당 채널을 구독하고 있습니다.'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except User.DoesNotExist:
+                pass  # 새 사용자인 경우 중복 체크 불필요
             
             subscription = serializer.save()
             return Response(
@@ -54,11 +64,15 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
-            subscription = serializer.validated_data['subscription']
+            user = serializer.validated_data['user']
+            # 해당 사용자의 모든 구독 정보를 반환
+            all_subscriptions = Subscription.objects.filter(user=user)
             return Response(
                 {
                     'message': '로그인 성공',
-                    'data': SubscriptionSerializer(subscription).data
+                    'user': UserSerializer(user).data,
+                    'subscriptions': SubscriptionSerializer(all_subscriptions, many=True).data,
+                    'subscription_count': all_subscriptions.count()
                 },
                 status=status.HTTP_200_OK
             )
@@ -179,7 +193,11 @@ class SubscriptionListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         email = self.request.query_params.get('email', None)
         if email:
-            return Subscription.objects.filter(email=email)
+            try:
+                user = User.objects.get(email=email)
+                return Subscription.objects.filter(user=user)
+            except User.DoesNotExist:
+                return Subscription.objects.none()
         return Subscription.objects.all()
     
     def perform_create(self, serializer):
@@ -190,20 +208,20 @@ class SubscriptionListCreateView(generics.ListCreateAPIView):
             send_mail(
                 subject='YouTube 메일링 구독 확인',
                 message=f'''
-안녕하세요 {subscription.name}님,
+안녕하세요 {subscription.user.name}님,
 
 YouTube 메일링 서비스에 구독해주셔서 감사합니다.
 
 구독 정보:
 - 채널: {subscription.youtube_channel_url}
-- 알림 시간: {subscription.notification_time}
+- 알림 시간: {subscription.user.notification_time}
 
 새로운 영상이 업로드되면 설정하신 시간에 이메일로 알려드리겠습니다.
 
 감사합니다.
                 ''',
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[subscription.email],
+                recipient_list=[subscription.user.email],
                 fail_silently=False,
             )
         except Exception as e:
@@ -263,16 +281,27 @@ def admin_subscriptions_view(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def admin_users_view(request):
+    """관리자용 사용자 목록"""
+    users = User.objects.all()
+    serializer = UserSerializer(users, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def admin_stats_view(request):
     """관리자용 통계"""
     total_subscriptions = Subscription.objects.count()
     active_subscriptions = Subscription.objects.filter(is_active=True).count()
     total_emails_sent = EmailLog.objects.count()
+    total_users = User.objects.count()
     
     return Response({
         'total_subscriptions': total_subscriptions,
         'active_subscriptions': active_subscriptions,
-        'total_emails_sent': total_emails_sent
+        'total_emails_sent': total_emails_sent,
+        'total_users': total_users
     })
 
 
@@ -290,6 +319,28 @@ def admin_delete_subscription_view(request, subscription_id):
     except Subscription.DoesNotExist:
         return Response(
             {'error': '구독을 찾을 수 없습니다.'}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def admin_delete_user_view(request, user_id):
+    """관리자용 사용자 삭제 (연관된 모든 구독도 함께 삭제)"""
+    try:
+        user = User.objects.get(id=user_id)
+        user_email = user.email
+        subscription_count = user.subscriptions.count()
+        user.delete()  # CASCADE로 인해 연관된 구독들도 자동 삭제
+        return Response(
+            {
+                'message': f'사용자 {user_email}과 연관된 {subscription_count}개의 구독이 성공적으로 삭제되었습니다.'
+            }, 
+            status=status.HTTP_200_OK
+        )
+    except User.DoesNotExist:
+        return Response(
+            {'error': '사용자를 찾을 수 없습니다.'}, 
             status=status.HTTP_404_NOT_FOUND
         )
 
@@ -473,3 +524,32 @@ def admin_process_youtube_summaries(request):
             'success': False,
             'message': f'YouTube 요약 처리 중 오류: {str(e)}'
         }, status=500)
+
+
+class UserUpdateView(generics.UpdateAPIView):
+    """사용자 정보 수정 (알림 시간 등)"""
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    lookup_field = 'email'
+    
+    def update(self, request, *args, **kwargs):
+        try:
+            user = User.objects.get(email=kwargs['email'])
+        except User.DoesNotExist:
+            return Response(
+                {'error': '사용자를 찾을 수 없습니다.'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = self.get_serializer(user, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response(
+                {
+                    'message': '사용자 정보가 성공적으로 수정되었습니다.',
+                    'data': UserSerializer(user).data
+                },
+                status=status.HTTP_200_OK
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

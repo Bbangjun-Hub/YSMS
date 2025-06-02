@@ -1,20 +1,65 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import Subscription, EmailLog
+from .models import Subscription, EmailLog, User
 
 
-class SubscriptionSerializer(serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True, min_length=6, required=False
     )
-    email = serializers.EmailField(required=False)
+    
+    class Meta:
+        model = User
+        fields = [
+            'id', 'name', 'email', 'password', 'notification_time', 
+            'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def create(self, validated_data):
+        """사용자 생성 시 비밀번호 해시화"""
+        password = validated_data.pop('password')
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+    
+    def update(self, instance, validated_data):
+        """사용자 수정 시 비밀번호가 있으면 해시화"""
+        password = validated_data.pop('password', None)
+        if password:
+            instance.set_password(password)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class SubscriptionSerializer(serializers.ModelSerializer):
+    # User 모델에서 가져오는 필드들
+    name = serializers.CharField(source='user.name', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    notification_time = serializers.TimeField(
+        source='user.notification_time', read_only=True
+    )
+    
+    # 새 구독 생성 시 필요한 필드들
+    user_name = serializers.CharField(write_only=True, required=False)
+    user_email = serializers.EmailField(write_only=True, required=False)
+    password = serializers.CharField(
+        write_only=True, min_length=6, required=False
+    )
+    user_notification_time = serializers.TimeField(
+        write_only=True, required=False
+    )
     
     class Meta:
         model = Subscription
         fields = [
-            'id', 'name', 'email', 'password', 'youtube_channel_url', 
-            'channel_name', 'notification_time', 'is_active', 
-            'created_at', 'updated_at'
+            'id', 'name', 'email', 'notification_time', 'youtube_channel_url', 
+            'channel_name', 'is_active', 'created_at', 'updated_at',
+            'user_name', 'user_email', 'password', 'user_notification_time'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -27,27 +72,49 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         return value
     
     def create(self, validated_data):
-        """구독 생성 시 비밀번호 해시화"""
-        # 생성 시에는 email과 password가 필수
-        if 'email' not in validated_data:
+        """구독 생성 - 사용자가 없으면 생성, 있으면 기존 사용자 사용"""
+        user_email = validated_data.pop('user_email', None)
+        user_name = validated_data.pop('user_name', None)
+        password = validated_data.pop('password', None)
+        user_notification_time = validated_data.pop(
+            'user_notification_time', None
+        )
+        
+        if not user_email:
             raise serializers.ValidationError("이메일은 필수입니다.")
-        if 'password' not in validated_data:
-            raise serializers.ValidationError("비밀번호는 필수입니다.")
-            
-        password = validated_data.pop('password')
-        subscription = Subscription(**validated_data)
-        subscription.set_password(password)
-        subscription.save()
+        
+        # 기존 사용자 확인
+        user, created = User.objects.get_or_create(
+            email=user_email,
+            defaults={
+                'name': user_name or '구독자',
+                'notification_time': user_notification_time or '09:00'
+            }
+        )
+        
+        # 새 사용자인 경우 비밀번호 설정
+        if created:
+            if not password:
+                raise serializers.ValidationError(
+                    "새 사용자는 비밀번호가 필요합니다."
+                )
+            user.set_password(password)
+            user.save()
+        
+        # 구독 생성
+        subscription = Subscription.objects.create(
+            user=user,
+            **validated_data
+        )
         return subscription
     
     def update(self, instance, validated_data):
-        """구독 수정 시 비밀번호가 있으면 해시화"""
-        password = validated_data.pop('password', None)
-        if password:
-            instance.set_password(password)
-        
-        # email 필드는 수정하지 않음 (보안상 이유)
-        validated_data.pop('email', None)
+        """구독 수정"""
+        # 사용자 관련 필드는 제거 (별도로 관리)
+        validated_data.pop('user_email', None)
+        validated_data.pop('user_name', None)
+        validated_data.pop('password', None)
+        validated_data.pop('user_notification_time', None)
         
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -64,13 +131,15 @@ class LoginSerializer(serializers.Serializer):
         password = attrs.get('password')
         
         try:
-            subscription = Subscription.objects.get(email=email)
-            if subscription.check_password(password):
-                attrs['subscription'] = subscription
+            user = User.objects.get(email=email)
+            if user.check_password(password):
+                attrs['user'] = user
                 return attrs
             else:
-                raise serializers.ValidationError("비밀번호가 올바르지 않습니다.")
-        except Subscription.DoesNotExist:
+                raise serializers.ValidationError(
+                    "비밀번호가 올바르지 않습니다."
+                )
+        except User.DoesNotExist:
             raise serializers.ValidationError("등록된 이메일이 아닙니다.")
 
 

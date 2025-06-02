@@ -38,16 +38,20 @@ const LoginPage = () => {
     try {
       const response = await axios.post('http://localhost:8000/api/subscriptions/login/', formData);
       
-      if (response.data.data) {
-        // 구독 정보와 토큰을 로컬 스토리지에 저장
+      if (response.data.user && response.data.subscriptions) {
+        // 사용자 정보와 구독 정보를 로컬 스토리지에 저장
         localStorage.setItem('userEmail', formData.email);
-        localStorage.setItem('subscriptionData', JSON.stringify(response.data.data));
+        localStorage.setItem('subscriptionData', JSON.stringify({
+          user: response.data.user,
+          subscriptions: response.data.subscriptions
+        }));
         // 간단한 인증 토큰 생성 (실제로는 백엔드에서 제공해야 함)
         localStorage.setItem('authToken', `user-${formData.email}-${Date.now()}`);
         
+        const subscriptionCount = response.data.subscription_count || response.data.subscriptions.length;
         setMessage({ 
           type: 'success', 
-          text: '로그인 성공! 구독 관리 페이지로 이동합니다.' 
+          text: `로그인 성공! ${subscriptionCount}개의 구독을 관리할 수 있습니다. 구독 관리 페이지로 이동합니다.` 
         });
         
         // 2초 후 편집 페이지로 이동

@@ -21,26 +21,34 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  TextField
+  TextField,
+  Tabs,
+  Tab
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import PeopleIcon from '@mui/icons-material/People';
-import EmailIcon from '@mui/icons-material/Email';
-import YouTubeIcon from '@mui/icons-material/YouTube';
-import SendIcon from '@mui/icons-material/Send';
-import DeleteIcon from '@mui/icons-material/Delete';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import {
+  Delete as DeleteIcon,
+  Send as SendIcon,
+  YouTube as YouTubeIcon,
+  People as PeopleIcon,
+  Email as EmailIcon,
+  Refresh as RefreshIcon,
+  Person as PersonIcon
+} from '@mui/icons-material';
 import axios from 'axios';
 
 const AdminPage = () => {
   const navigate = useNavigate();
+  const [currentTab, setCurrentTab] = useState(0);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [users, setUsers] = useState([]);
   const [stats, setStats] = useState({
     total_subscriptions: 0,
     active_subscriptions: 0,
-    total_emails_sent: 0
+    total_emails_sent: 0,
+    total_users: 0
   });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -76,6 +84,10 @@ const AdminPage = () => {
       // 구독 목록 가져오기
       const subscriptionsResponse = await axios.get('http://localhost:8000/api/subscriptions/admin/subscriptions/');
       setSubscriptions(subscriptionsResponse.data);
+
+      // 사용자 목록 가져오기
+      const usersResponse = await axios.get('http://localhost:8000/api/subscriptions/admin/users/');
+      setUsers(usersResponse.data);
 
       // 통계 가져오기
       const statsResponse = await axios.get('http://localhost:8000/api/subscriptions/admin/stats/');
@@ -113,6 +125,26 @@ const AdminPage = () => {
       setMessage({ 
         type: 'success', 
         text: '구독이 성공적으로 삭제되었습니다.' 
+      });
+      fetchData();
+    } catch (error) {
+      setMessage({ 
+        type: 'error', 
+        text: '삭제 중 오류가 발생했습니다.' 
+      });
+    }
+  };
+
+  const handleDeleteUser = async (userId, userEmail) => {
+    if (!window.confirm(`정말로 사용자 "${userEmail}"과 연관된 모든 구독을 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      const response = await axios.delete(`http://localhost:8000/api/subscriptions/admin/users/${userId}/`);
+      setMessage({ 
+        type: 'success', 
+        text: response.data.message 
       });
       fetchData();
     } catch (error) {
@@ -251,12 +283,12 @@ const AdminPage = () => {
         <Grid item xs={12} md={4}>
           <Card>
             <CardContent sx={{ textAlign: 'center' }}>
-              <PeopleIcon sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+              <PersonIcon sx={{ fontSize: 48, color: 'info.main', mb: 1 }} />
               <Typography variant="h4" component="div">
-                {stats.total_subscriptions}
+                {stats.total_users}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                총 구독자 수
+                총 사용자 수
               </Typography>
             </CardContent>
           </Card>
@@ -325,73 +357,135 @@ const AdminPage = () => {
         </Paper>
       </Box>
 
-      {/* 구독 목록 테이블 */}
+      {/* 탭 구조 */}
       <Paper elevation={2}>
-        <Box p={3}>
-          <Typography variant="h6" gutterBottom>
-            전체 구독 목록
-          </Typography>
-          
-          <TableContainer>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>ID</TableCell>
-                  <TableCell>이름</TableCell>
-                  <TableCell>이메일</TableCell>
-                  <TableCell>YouTube 채널</TableCell>
-                  <TableCell>알림 시간</TableCell>
-                  <TableCell>등록일</TableCell>
-                  <TableCell>상태</TableCell>
-                  <TableCell>작업</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {subscriptions.map((subscription) => (
-                  <TableRow key={subscription.id}>
-                    <TableCell>{subscription.id}</TableCell>
-                    <TableCell>{subscription.name}</TableCell>
-                    <TableCell>{subscription.email}</TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {subscription.youtube_channel_url}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>{subscription.notification_time}</TableCell>
-                    <TableCell>
-                      {new Date(subscription.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <Chip 
-                        label={subscription.is_active ? '활성' : '비활성'}
-                        color={subscription.is_active ? 'success' : 'default'}
-                        size="small"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="small"
-                        startIcon={<DeleteIcon />}
-                        color="error"
-                        onClick={() => handleDeleteSubscription(subscription.id)}
-                      >
-                        삭제
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          
-          {subscriptions.length === 0 && (
-            <Box textAlign="center" py={4}>
-              <Typography variant="body1" color="text.secondary">
-                등록된 구독이 없습니다.
-              </Typography>
-            </Box>
-          )}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs value={currentTab} onChange={(e, newValue) => setCurrentTab(newValue)}>
+            <Tab label={`사용자 목록 (${users.length})`} />
+            <Tab label={`구독 목록 (${subscriptions.length})`} />
+          </Tabs>
         </Box>
+
+        {/* 사용자 목록 탭 */}
+        {currentTab === 0 && (
+          <Box p={3}>
+            <Typography variant="h6" gutterBottom>
+              전체 사용자 목록
+            </Typography>
+            
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>ID</TableCell>
+                    <TableCell>이름</TableCell>
+                    <TableCell>이메일</TableCell>
+                    <TableCell>알림 시간</TableCell>
+                    <TableCell>구독 수</TableCell>
+                    <TableCell>등록일</TableCell>
+                    <TableCell>상태</TableCell>
+                    <TableCell>작업</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {users.map((user) => {
+                    const userSubscriptionCount = subscriptions.filter(sub => sub.email === user.email).length;
+                    return (
+                      <TableRow key={user.id}>
+                        <TableCell>{user.id}</TableCell>
+                        <TableCell>{user.name}</TableCell>
+                        <TableCell>{user.email}</TableCell>
+                        <TableCell>{user.notification_time}</TableCell>
+                        <TableCell>{userSubscriptionCount}</TableCell>
+                        <TableCell>
+                          {new Date(user.created_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>
+                          <Chip 
+                            label={user.is_active ? '활성' : '비활성'}
+                            color={user.is_active ? 'success' : 'default'}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="small"
+                            color="error"
+                            startIcon={<DeleteIcon />}
+                            onClick={() => handleDeleteUser(user.id, user.email)}
+                          >
+                            삭제
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
+
+        {/* 구독 목록 탭 */}
+        {currentTab === 1 && (
+          <Box p={3}>
+            <Typography variant="h6" gutterBottom>
+              전체 구독 목록
+            </Typography>
+            
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>ID</TableCell>
+                    <TableCell>이름</TableCell>
+                    <TableCell>이메일</TableCell>
+                    <TableCell>YouTube 채널</TableCell>
+                    <TableCell>알림 시간</TableCell>
+                    <TableCell>등록일</TableCell>
+                    <TableCell>상태</TableCell>
+                    <TableCell>작업</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {subscriptions.map((subscription) => (
+                    <TableRow key={subscription.id}>
+                      <TableCell>{subscription.id}</TableCell>
+                      <TableCell>{subscription.name}</TableCell>
+                      <TableCell>{subscription.email}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {subscription.youtube_channel_url}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{subscription.notification_time}</TableCell>
+                      <TableCell>
+                        {new Date(subscription.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={subscription.is_active ? '활성' : '비활성'}
+                          color={subscription.is_active ? 'success' : 'default'}
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          color="error"
+                          startIcon={<DeleteIcon />}
+                          onClick={() => handleDeleteSubscription(subscription.id)}
+                        >
+                          삭제
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        )}
       </Paper>
 
       {/* 테스트 이메일 다이얼로그 */}

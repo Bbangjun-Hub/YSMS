@@ -69,4 +69,32 @@ test_data/
 
 # 로그 파일들
 *.log
-logs/ 
+logs/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# 데이터베이스 파일들
+*.db
+*.sqlite
+*.sqlite3
+
+# 백업 파일들
+*.backup
+*.dump
+
+# 개발 중 생성된 파일들
+migrate_data.py
+test_*.py
+debug_*.py
+
+# OAuth 토큰 및 인증 파일들
+*token*.json
+*credentials*.json
+*auth*.json
+
+# 환경별 설정 파일들
+local_settings.py
+production_settings.py
+development_settings.py 

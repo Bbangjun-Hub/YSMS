@@ -405,8 +405,9 @@ class YouTubeTranscriptDownloader:
             logger.info("직접 연결을 사용합니다.")
         
         # IP 차단 방지를 위한 재시도 설정
-        max_retries = 3
-        retry_delay = 5  # 초 단위 기본 대기 시간
+        max_retries = 5  # 재시도 횟수 줄임
+        base_delay = 1.0  # 기본 대기 시간을 1초로 줄임
+        max_delay = 8.0   # 최대 대기 시간 제한
         
         # 채널 ID 목록을 한 번에 요청하여 채널 정보 가져오기 (배치 처리로 최적화)
         channel_info_map = {}
@@ -464,7 +465,7 @@ class YouTubeTranscriptDownloader:
                     logger.info(f"게시일: {video['published_at']}")
 
                     # 영상 정보를 가져온 후 요청 과부하 방지를 위해 약간의 지연 추가
-                    time.sleep(random.uniform(1.0, 2.0))
+                    time.sleep(random.uniform(0.5, 1.0))  # 대기 시간 단축
                     
                     try:
                         transcript_list = None
@@ -492,7 +493,8 @@ class YouTubeTranscriptDownloader:
                                     if "Too Many Requests" in str(e):
                                         logger.warning(f"YouTube 요청 제한에 도달했습니다. 재시도 중... ({attempt+1}/{max_retries})")
                                         # 지수 백오프 전략 적용 - 실패할 때마다 대기 시간 증가
-                                        wait_time = retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                                        wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                                        wait_time = min(wait_time, max_delay)
                                         logger.info(f"{wait_time:.1f}초 대기 후 재시도합니다.")
                                         time.sleep(wait_time)
                                         continue
@@ -559,7 +561,8 @@ class YouTubeTranscriptDownloader:
                             except Exception as e:
                                 if "Too Many Requests" in str(e) and attempt < max_retries - 1:
                                     # 지수 백오프 전략 적용 - 실패할 때마다 대기 시간 증가
-                                    wait_time = retry_delay * (2 ** attempt) + random.uniform(0, 1)
+                                    wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                                    wait_time = min(wait_time, max_delay)
                                     logger.warning(f"YouTube 요청 제한에 도달했습니다. {wait_time:.1f}초 후 재시도합니다. ({attempt+1}/{max_retries})")
                                     time.sleep(wait_time)
                                 else:
@@ -588,7 +591,7 @@ class YouTubeTranscriptDownloader:
                             })
                             
                             # 성공적으로 자막을 가져온 후 다음 비디오 처리 전 잠시 대기
-                            time.sleep(random.uniform(2.0, 3.0))
+                            time.sleep(random.uniform(1.0, 1.5))  # 대기 시간 단축
 
                     except Exception as e:
                         logger.error(f"{channel_name} 자막 처리 중 오류: {str(e)}", exc_info=True)
